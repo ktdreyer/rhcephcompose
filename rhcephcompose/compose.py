@@ -188,46 +188,63 @@ class Compose(object):
         variants = Variants()
         variants.parse_file(self.variants_file)
 
+        children = []
+
         for variant_id, variant_groups in variants.items():
-            # Top-level directory for this repository:
-            variant_dir = os.path.join(self.output_dir, variant_id)
-            if not os.path.isdir(variant_dir):
-                os.mkdir(variant_dir)
+            pid = os.fork()
+            if pid:
+                children.append(pid)
+            else:
+                self.create_variant_repo(variant_id, variant_groups,
+                                         distro, comps)
+                os._exit(0)
 
-            # Set up the reprepro configuration:
-            log.info('Creating reprepro configuration for %s' % variant_id)
-            conf_dir = os.path.join(variant_dir, 'conf')
-            if not os.path.isdir(conf_dir):
-                os.mkdir(conf_dir)
-            distributions_path = os.path.join(conf_dir, 'distributions')
-            dist_template = textwrap.dedent('''\
-                Codename: {codename}
-                Suite: stable
-                Components: main
-                Architectures: amd64 i386
-                Origin: Red Hat, Inc.
-                Description: Ceph distributed file system
-                DebIndices: Packages Release . .gz .bz2
-                DscIndices: Sources Release .gz .bz2
-                Contents: .gz .bz2
+        for i, child in enumerate(children):
+            pid, status = os.waitpid(child, 0)
+            if status != 0:
+                raise SystemExit('Failure in variant child PID %s' % pid)
 
-            ''')
-            with open(distributions_path, 'a') as dist_conf_file:
-                dist_conf_file.write(dist_template.format(codename=distro))
+    def create_variant_repo(self, variant_id, variant_groups, distro, comps):
 
-            # Loop through all the comps groups in this variant. (in Ceph we
-            # only have one group per variant, so far!)
-            for group_id in variant_groups:
-                # Loop through all the binaries in this comps group
-                binaries = comps.groups[group_id].binaries
-                msg = 'Comps group ID "%s" contains %d binaries %s'
-                msg_binaries = list(map(lambda x: x.filename, binaries))
-                log.info(msg % (group_id, len(binaries), msg_binaries))
-                for binary in binaries:
-                    # Add this binary to our variant's repo/directory:
-                    self.add_binary_to_repo(binary=binary,
-                                            repo_path=variant_dir,
-                                            distro=distro)
+        # variant_id, variant_groups = variant
+        # Top-level directory for this repository:
+        variant_dir = os.path.join(self.output_dir, variant_id)
+        if not os.path.isdir(variant_dir):
+            os.mkdir(variant_dir)
+
+        # Set up the reprepro configuration:
+        conf_dir = os.path.join(variant_dir, 'conf')
+        if not os.path.isdir(conf_dir):
+            os.mkdir(conf_dir)
+        distributions_path = os.path.join(conf_dir, 'distributions')
+        dist_template = textwrap.dedent('''\
+            Codename: {codename}
+            Suite: stable
+            Components: main
+            Architectures: amd64 i386
+            Origin: Red Hat, Inc.
+            Description: Ceph distributed file system
+            DebIndices: Packages Release . .gz .bz2
+            DscIndices: Sources Release .gz .bz2
+            Contents: .gz .bz2
+
+        ''')
+        with open(distributions_path, 'a') as dist_conf_file:
+            dist_conf_file.write(dist_template.format(codename=distro))
+
+        # Loop through all the comps groups in this variant. (in Ceph we
+        # only have one group per variant, so far!)
+        for group_id in variant_groups:
+            # Loop through all the binaries in this comps group
+            binaries = comps.groups[group_id].binaries
+            msg = 'Comps group ID "%s" contains %d binaries %s'
+            msg_binaries = list(map(lambda x: x.filename, binaries))
+            log.info(msg % (group_id, len(binaries), msg_binaries))
+            for binary in binaries:
+                # Add this binary to our variant's repo/directory:
+                self.add_binary_to_repo(binary=binary,
+                                        repo_path=variant_dir,
+                                        distro=distro)
 
     def add_binary_to_repo(self, binary, repo_path, distro):
         """ Add a binary (.deb) to a Debian repository. """
